@@ -1,0 +1,3680 @@
+{
+  "version": 1,
+  "status": "design-only",
+  "description": "Nguồn thống nhất cho database.md và sơ đồ; không phải migration SQL.",
+  "tables": [
+    {
+      "name": "users",
+      "group": "identity",
+      "description": "Tài khoản và lựa chọn mẫu miễn phí cố định",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "password_hash",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "display_name",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "free_template_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "card_templates.id"
+        },
+        {
+          "name": "email_verified_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "mfa_enabled",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(lower(email)); role: admin/staff/guest, mặc định guest; status: active/suspended.",
+        "Trigger cấm đổi/reset free_template_id sau lần tạo free thành công; chỉ luồng quản trị thay thế mẫu có audit được phép ngoại lệ.",
+        "MFA bắt buộc admin/staff; nâng role đòi credential đã xác minh và thu hồi phiên cũ. mfa_enabled là policy projection, không phải bằng chứng đã MFA ở phiên."
+      ]
+    },
+    {
+      "name": "sessions",
+      "group": "identity",
+      "description": "Metadata phiên dùng làm sid trong JWT",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "password_verified_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "mfa_verified_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "user_agent_label",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,user_id); expires_at > created_at; không lưu access token thô.",
+        "Chỉ tạo phiên business sau đủ yếu tố; role đặc quyền yêu cầu mfa_verified_at và credential policy. Refresh không tự nâng mức MFA hoặc làm mới thời điểm xác thực lại."
+      ]
+    },
+    {
+      "name": "refresh_tokens",
+      "group": "identity",
+      "description": "Refresh token opaque có rotation",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "session_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "sessions.id"
+        },
+        {
+          "name": "parent_token_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [
+            "UK"
+          ],
+          "references": "refresh_tokens.id"
+        },
+        {
+          "name": "token_hash",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "used_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,session_id); FK(parent_token_id,session_id) cùng session.",
+        "Partial UNIQUE(session_id) WHERE used_at IS NULL AND revoked_at IS NULL; token hết hạn phải đổi trạng thái trước khi thay.",
+        "Hạn token không vượt sessions.expires_at; replay thu hồi session; giữ lịch sử hash theo retention."
+      ]
+    },
+    {
+      "name": "auth_tokens",
+      "group": "identity",
+      "description": "Xác minh email và reset mật khẩu",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "purpose",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "token_hash",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "used_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "purpose: verify_email/reset_password; expires_at > created_at; token dùng một lần."
+      ]
+    },
+    {
+      "name": "audit_logs",
+      "group": "identity",
+      "description": "Audit đã lọc thông tin nhạy cảm",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "actor_user_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "action",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "target_type",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "target_id",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "safe_metadata",
+          "type": "jsonb",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "target_type/target_id là tham chiếu logic, không phải FK đa bảng."
+      ]
+    },
+    {
+      "name": "occasions",
+      "group": "cards",
+      "description": "Danh mục dịp/kiểu hiển thị",
+      "columns": [
+        {
+          "name": "id",
+          "type": "smallint",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "code",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "label_vi",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "label_en",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "Ngừng sử dụng bằng is_active; không xóa hàng đang được tham chiếu."
+      ]
+    },
+    {
+      "name": "card_styles",
+      "group": "cards",
+      "description": "Danh mục dịp/kiểu hiển thị",
+      "columns": [
+        {
+          "name": "id",
+          "type": "smallint",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "code",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "label_vi",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "label_en",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "Ngừng sử dụng bằng is_active; không xóa hàng đang được tham chiếu."
+      ]
+    },
+    {
+      "name": "card_templates",
+      "group": "cards",
+      "description": "Mẫu thiết kế có thể mua hoặc dùng theo gói",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "code",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "occasion_id",
+          "type": "smallint",
+          "nullable": true,
+          "keys": [],
+          "references": "occasions.id"
+        },
+        {
+          "name": "style_id",
+          "type": "smallint",
+          "nullable": true,
+          "keys": [],
+          "references": "card_styles.id"
+        },
+        {
+          "name": "default_content",
+          "type": "jsonb",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "Mẫu đã bán/được khóa free không xóa; ngừng bán không thu hồi license active."
+      ]
+    },
+    {
+      "name": "cards",
+      "group": "cards",
+      "description": "Thiệp nháp và quyền của chủ sở hữu",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "template_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "card_templates.id"
+        },
+        {
+          "name": "occasion_id",
+          "type": "smallint",
+          "nullable": true,
+          "keys": [],
+          "references": "occasions.id"
+        },
+        {
+          "name": "style_id",
+          "type": "smallint",
+          "nullable": true,
+          "keys": [],
+          "references": "card_styles.id"
+        },
+        {
+          "name": "access_tier",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "template_license_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "template_licenses.id"
+        },
+        {
+          "name": "entitlement_period_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "subscription_periods.id"
+        },
+        {
+          "name": "access_expires_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "sender_name",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "sender_email",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "recipient_name",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "recipient_email",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "cover_message",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "wishes",
+          "type": "jsonb",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "background_color",
+          "type": "varchar(7)",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "heading_color",
+          "type": "varchar(7)",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "text_color",
+          "type": "varchar(7)",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "delivery_date",
+          "type": "date",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "recipient_timezone",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "published_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,user_id); status: draft/published; version > 0; wishes là mảng block đã validate.",
+        "access_tier: free/plus/purchased; nhóm license/period/hạn theo ba nhánh tại data-integrity.md.",
+        "Composite FK bảo vệ ownership, template license và quota kỳ; màu có dạng #RRGGBB khi khác NULL."
+      ]
+    },
+    {
+      "name": "upload_intents",
+      "group": "media",
+      "description": "Giữ quyền/quota upload",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "expected_public_id",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,user_id); kind: image/audio; status: pending/completed/expired."
+      ]
+    },
+    {
+      "name": "media_assets",
+      "group": "media",
+      "description": "Metadata Cloudinary đã xác minh",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "upload_intent_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ],
+          "references": "upload_intents.id"
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "cloudinary_asset_id",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "public_id",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "resource_type",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "cloudinary_version",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "secure_url",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "format",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "bytes",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "width",
+          "type": "integer",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "height",
+          "type": "integer",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "duration_seconds",
+          "type": "numeric",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,user_id,kind), UNIQUE(id,user_id), UNIQUE(resource_type,public_id); composite FK intent cùng chủ.",
+        "bytes > 0; dimension/duration khi có phải dương; status: ready/deleting/delete_failed.",
+        "secure_url là metadata nội bộ, không tự trả URL vĩnh viễn cho nội dung Plus cần thu hồi."
+      ]
+    },
+    {
+      "name": "card_media",
+      "group": "media",
+      "description": "Media của bản nháp",
+      "columns": [
+        {
+          "name": "card_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "cards.id"
+        },
+        {
+          "name": "media_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "media_assets.id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "position",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "caption",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "PK(card_id,media_id); UNIQUE(card_id,role,position); position >= 0; partial UNIQUE(card_id) WHERE role=audio.",
+        "Composite FK (card_id,user_id) và (media_id,user_id,role); role khớp kind."
+      ]
+    },
+    {
+      "name": "card_shares",
+      "group": "cards",
+      "description": "Snapshot và link chia sẻ hiện tại",
+      "columns": [
+        {
+          "name": "card_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "cards.id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "template_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "card_templates.id"
+        },
+        {
+          "name": "access_tier",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "template_license_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "template_licenses.id"
+        },
+        {
+          "name": "entitlement_period_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "subscription_periods.id"
+        },
+        {
+          "name": "access_expires_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "token_hash",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "published_snapshot",
+          "type": "jsonb",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(card_id,user_id); composite FK cùng chủ card, license/kỳ và quota tương tự cards.",
+        "Snapshot có thể giữ mẫu cũ khi nháp đổi mẫu; link expiry độc lập hạn quyền."
+      ]
+    },
+    {
+      "name": "card_share_media",
+      "group": "media",
+      "description": "FK bảo vệ asset trong snapshot",
+      "columns": [
+        {
+          "name": "card_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "card_shares.card_id"
+        },
+        {
+          "name": "media_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "media_assets.id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "position",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "caption",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "PK(card_id,media_id); UNIQUE(card_id,role,position); position >= 0; partial UNIQUE(card_id) WHERE role=audio.",
+        "Composite FK (card_id,user_id) và (media_id,user_id,role); media RESTRICT, liên kết CASCADE khi xóa share."
+      ]
+    },
+    {
+      "name": "plans",
+      "group": "plans",
+      "description": "Định danh gói free/plus",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "code",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": []
+    },
+    {
+      "name": "plan_versions",
+      "group": "plans",
+      "description": "Phiên bản quyền bất biến",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "plan_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "plans.id"
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "is_published",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(plan_id,version); version > 0; sau publish không sửa feature/template/quota của phiên bản."
+      ]
+    },
+    {
+      "name": "plan_prices",
+      "group": "plans",
+      "description": "Giá theo phiên bản gói",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "plan_version_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "plan_versions.id"
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "currency",
+          "type": "varchar(3)",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "billing_interval",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "provider_price_id",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "amount_minor >= 0; billing_interval: month/year; giá đã dùng bất biến; tạo hàng mới khi đổi giá."
+      ]
+    },
+    {
+      "name": "features",
+      "group": "plans",
+      "description": "Danh mục tính năng",
+      "columns": [
+        {
+          "name": "code",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "value_type",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "value_type: boolean/integer; limit NULL không tự nghĩa vô hạn."
+      ]
+    },
+    {
+      "name": "plan_features",
+      "group": "plans",
+      "description": "Quyền tính năng của gói",
+      "columns": [
+        {
+          "name": "plan_version_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "plan_versions.id"
+        },
+        {
+          "name": "feature_code",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "features.code"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "limit_value",
+          "type": "bigint",
+          "nullable": true,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "PK(plan_version_id,feature_code); limit_value >= 0 khi có; value_type và enabled phải nhất quán."
+      ]
+    },
+    {
+      "name": "plan_templates",
+      "group": "plans",
+      "description": "Danh mục mẫu của gói",
+      "columns": [
+        {
+          "name": "plan_version_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "plan_versions.id"
+        },
+        {
+          "name": "template_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "card_templates.id"
+        }
+      ],
+      "rules": [
+        "PK(plan_version_id,template_id); free có thể cho chọn ban đầu nhiều mẫu nhưng mỗi user chỉ khóa một."
+      ]
+    },
+    {
+      "name": "template_prices",
+      "group": "plans",
+      "description": "Giá mua lẻ từng mẫu",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "template_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "card_templates.id"
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "currency",
+          "type": "varchar(3)",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "provider_price_id",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "amount_minor >= 0; giá đã dùng bất biến."
+      ]
+    },
+    {
+      "name": "carts",
+      "group": "cart",
+      "description": "Giỏ nhiều mẫu và tối đa một Plus",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "currency",
+          "type": "varchar(3)",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,user_id); partial UNIQUE(user_id) WHERE status=active; status: active/archived; version > 0."
+      ]
+    },
+    {
+      "name": "cart_items",
+      "group": "cart",
+      "description": "Dòng giỏ có revision",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "cart_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "carts.id"
+        },
+        {
+          "name": "product_type",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "product_key",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "plan_price_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "plan_prices.id"
+        },
+        {
+          "name": "template_price_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "template_prices.id"
+        },
+        {
+          "name": "quantity",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "revision",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(cart_id,product_key); partial UNIQUE(cart_id) WHERE product_type=plus.",
+        "quantity=1; revision > 0 và tăng mỗi lần sửa; XOR FK giá khớp loại plus/template; product_key từ template_id hoặc hằng plus do server cấp."
+      ]
+    },
+    {
+      "name": "checkout_quotes",
+      "group": "cart",
+      "description": "Báo giá có hạn chưa giữ lượt",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "cart_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "carts.id"
+        },
+        {
+          "name": "cart_version",
+          "type": "integer",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "input_hash",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "pricing_snapshot",
+          "type": "jsonb",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,user_id); cart_id/cart_version cùng NULL cho direct hoặc cùng có cho giỏ; snapshot chỉ server tạo."
+      ]
+    },
+    {
+      "name": "discounts",
+      "group": "discount",
+      "description": "Mã và giới hạn dùng chung qua mọi phiên bản",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "code",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "current_version_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "discount_versions.id"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "usage_limit",
+          "type": "integer",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "per_user_limit",
+          "type": "integer",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(lower(code)); limits NULL không áp trần, khác NULL phải > 0 và không thấp hơn used+reserved khi cập nhật.",
+        "FK(current_version_id,id) → discount_versions(id,discount_id); counter không reset khi đổi version."
+      ]
+    },
+    {
+      "name": "discount_versions",
+      "group": "discount",
+      "description": "Điều kiện và công thức giảm bất biến",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "discount_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "discounts.id"
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "scope",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "application_level",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "basis_points",
+          "type": "integer",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "currency",
+          "type": "varchar(3)",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "min_subtotal_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "starts_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "ends_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "is_published",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(discount_id,version), UNIQUE(id,discount_id); scope: plus/template/both; application_level: item/cart.",
+        "percentage: basis_points 1..10000, amount NULL; fixed_amount: amount > 0, currency bắt buộc, basis_points NULL.",
+        "min_subtotal_minor >= 0; ends_at > starts_at khi có; bất biến sau publish."
+      ]
+    },
+    {
+      "name": "discount_plan_targets",
+      "group": "discount",
+      "description": "Đối tượng áp dụng mã",
+      "columns": [
+        {
+          "name": "discount_version_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "discount_versions.id"
+        },
+        {
+          "name": "plan_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "plans.id"
+        }
+      ],
+      "rules": [
+        "PK hai cột; rỗng nghĩa là mọi sản phẩm trong scope."
+      ]
+    },
+    {
+      "name": "discount_template_targets",
+      "group": "discount",
+      "description": "Đối tượng áp dụng mã",
+      "columns": [
+        {
+          "name": "discount_version_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "discount_versions.id"
+        },
+        {
+          "name": "template_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "card_templates.id"
+        }
+      ],
+      "rules": [
+        "PK hai cột; rỗng nghĩa là mọi sản phẩm trong scope."
+      ]
+    },
+    {
+      "name": "discount_counters",
+      "group": "discount",
+      "description": "Bộ đếm toàn mã",
+      "columns": [
+        {
+          "name": "discount_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "discounts.id"
+        },
+        {
+          "name": "used",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "reserved",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "used/reserved >= 0; cập nhật nguyên tử dưới khóa discount."
+      ]
+    },
+    {
+      "name": "discount_user_counters",
+      "group": "discount",
+      "description": "Bộ đếm mã theo user",
+      "columns": [
+        {
+          "name": "discount_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "discounts.id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "users.id"
+        },
+        {
+          "name": "used",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "reserved",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "PK(discount_id,user_id); used/reserved >= 0."
+      ]
+    },
+    {
+      "name": "orders",
+      "group": "billing",
+      "description": "Đơn và tổng tiền bất biến",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "quote_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ],
+          "references": "checkout_quotes.id"
+        },
+        {
+          "name": "source_cart_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "carts.id"
+        },
+        {
+          "name": "source_cart_version",
+          "type": "integer",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "discount_version_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "discount_versions.id"
+        },
+        {
+          "name": "subtotal_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "discount_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "total_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "currency",
+          "type": "varchar(3)",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "pricing_snapshot",
+          "type": "jsonb",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "checkout_id",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "idempotency_key",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "request_hash",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,user_id), UNIQUE(user_id,idempotency_key), UNIQUE(provider,checkout_id) khi có.",
+        "status: pending/paid/fulfilled/failed/canceled/expired/reconciliation_required; free-order có thể pending→fulfilled không giả paid.",
+        "Tiền NOT NULL, subtotal >= 0, 0 <= discount <= subtotal, total=subtotal-discount; tổng khớp SUM item.",
+        "Composite FK quote/cart cùng user; một quote tối đa một order; source cart/version cùng có hoặc cùng NULL."
+      ]
+    },
+    {
+      "name": "order_items",
+      "group": "billing",
+      "description": "Dòng đơn sau phân bổ discount",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "order_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "orders.id"
+        },
+        {
+          "name": "product_type",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "product_key",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "line_number",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "plan_price_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "plan_prices.id"
+        },
+        {
+          "name": "template_price_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "template_prices.id"
+        },
+        {
+          "name": "quantity",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "subtotal_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "discount_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "total_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "currency",
+          "type": "varchar(3)",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "product_snapshot",
+          "type": "jsonb",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "source_cart_item_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "source_item_revision",
+          "type": "integer",
+          "nullable": true,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,order_id), UNIQUE(order_id,line_number), UNIQUE(order_id,product_key); partial UNIQUE(order_id) WHERE product_type=plus.",
+        "quantity=1, line_number > 0, XOR giá đúng loại; tổng tiền hợp lệ, currency cùng order; source fields cùng có/NULL.",
+        "source_cart_item_id là tham chiếu lịch sử không FK để xóa dòng giỏ không xóa dữ liệu đơn."
+      ]
+    },
+    {
+      "name": "discount_redemptions",
+      "group": "discount",
+      "description": "Một lượt dùng cho cả order",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "discount_version_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "discount_versions.id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "order_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ],
+          "references": "orders.id"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "discount_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "redeemed_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "released_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "status: reserved/redeemed/released; composite FK order cùng user, version/mức giảm khớp order qua procedure."
+      ]
+    },
+    {
+      "name": "payments",
+      "group": "billing",
+      "description": "Khoản thanh toán provider",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "order_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "orders.id"
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "provider_payment_id",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "currency",
+          "type": "varchar(3)",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "refunded_amount_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(provider,provider_payment_id), UNIQUE(id,order_id); amount >= 0, refunded trong [0,amount]; currency khớp order.",
+        "status: pending/succeeded/failed/refunded/partially_refunded; không dùng status hiện tại thay ledger cash."
+      ]
+    },
+    {
+      "name": "order_fulfillments",
+      "group": "billing",
+      "description": "Cấp quyền đúng một lần cho mỗi dòng đơn",
+      "columns": [
+        {
+          "name": "order_item_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "order_items.id"
+        },
+        {
+          "name": "order_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "orders.id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "source_kind",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "payment_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "payments.id"
+        },
+        {
+          "name": "fulfilled_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "FK(order_item_id,order_id) và FK(payment_id,order_id) cùng order; FK(order_id,user_id) bảo vệ chủ.",
+        "source_kind: payment/free_order; payment bắt buộc cho paid, NULL cho total=0 nội bộ đã validate; immutable.",
+        "Tất cả dòng fulfill cùng transaction; khóa order chống hai payment success cấp lại."
+      ]
+    },
+    {
+      "name": "subscriptions",
+      "group": "subscriptions",
+      "description": "Thuê bao Plus và lịch sử",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "price_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "plan_prices.id"
+        },
+        {
+          "name": "origin_order_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "orders.id"
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "provider_subscription_id",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "current_period_start",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "current_period_end",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "cancel_at_period_end",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "canceled_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,user_id), UNIQUE(provider,provider_subscription_id); partial UNIQUE(user_id) cho pending/active/past_due/canceled.",
+        "status: pending/active/past_due/canceled/expired; period bounds cùng có/NULL, end > start; confirmed periods là nguồn quyền."
+      ]
+    },
+    {
+      "name": "subscription_periods",
+      "group": "subscriptions",
+      "description": "Kỳ đã thanh toán với hạn/quota cố định",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "subscriptions.id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "plan_version_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "plan_versions.id"
+        },
+        {
+          "name": "source_order_item_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ],
+          "references": "order_fulfillments.order_item_id"
+        },
+        {
+          "name": "provider_period_key",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "starts_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "ends_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "max_distinct_templates",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,user_id), UNIQUE(subscription_id,provider_period_key); composite FK subscription cùng chủ.",
+        "ends_at > starts_at; max_distinct_templates > 0; status: confirmed/revoked; nguồn fulfillment phải đúng Plus/user/version.",
+        "Một dòng đơn Plus cấp một kỳ. Gia hạn provider phải tạo renewal order/item và fulfillment idempotent trước kỳ mới."
+      ]
+    },
+    {
+      "name": "period_template_usage",
+      "group": "subscriptions",
+      "description": "Sổ mẫu không hoàn lượt",
+      "columns": [
+        {
+          "name": "period_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "subscription_periods.id"
+        },
+        {
+          "name": "template_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "card_templates.id"
+        },
+        {
+          "name": "first_used_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "PK(period_id,template_id); khóa kỳ khi cấp mới; không xóa vì đổi/xóa card."
+      ]
+    },
+    {
+      "name": "template_licenses",
+      "group": "billing",
+      "description": "License mẫu mua lẻ vĩnh viễn",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "template_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "card_templates.id"
+        },
+        {
+          "name": "source_order_item_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ],
+          "references": "order_fulfillments.order_item_id"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "granted_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(user_id,template_id), UNIQUE(id,user_id,template_id); status: active/revoked; active yêu cầu revoked_at NULL.",
+        "Nguồn fulfillment phải là template đúng chủ/mẫu; cấp lại license revoked có audit và giữ license_events."
+      ]
+    },
+    {
+      "name": "license_events",
+      "group": "billing",
+      "description": "Lịch sử cấp/thu hồi/mua lại",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "license_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "template_licenses.id"
+        },
+        {
+          "name": "order_item_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "order_items.id"
+        },
+        {
+          "name": "payment_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "payments.id"
+        },
+        {
+          "name": "action",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "Nguồn order item/payment phải cùng user/order và lần cấp; webhook cũ không thu hồi lần mua mới."
+      ]
+    },
+    {
+      "name": "webhook_events",
+      "group": "operations",
+      "description": "Inbox webhook đã xác minh",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "event_id",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "event_type",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "payload_hash",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "processing_status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "occurred_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "received_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "processed_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "retry_count",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(provider,event_id); retry_count >= 0; received/processed/failed; payload replay lưu bảo vệ riêng theo retention."
+      ]
+    },
+    {
+      "name": "subscription_events",
+      "group": "subscriptions",
+      "description": "Audit thay đổi thuê bao",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "subscription_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "subscriptions.id"
+        },
+        {
+          "name": "payment_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "payments.id"
+        },
+        {
+          "name": "webhook_event_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "webhook_events.id"
+        },
+        {
+          "name": "event_type",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "effective_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": []
+    },
+    {
+      "name": "payment_events",
+      "group": "analytics",
+      "description": "Ledger tiền append-only",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "payment_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "payments.id"
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "provider_financial_event_id",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "event_kind",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "currency",
+          "type": "varchar(3)",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "unallocated_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "occurred_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "recorded_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "source_webhook_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "webhook_events.id"
+        },
+        {
+          "name": "reconciliation_status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(provider,provider_financial_event_id,event_kind); event_kind: capture/refund; adjustment chưa bật khi chưa chốt policy.",
+        "amount >= 0, 0 <= unallocated <= amount; SUM allocations + unallocated = amount."
+      ]
+    },
+    {
+      "name": "payment_event_allocations",
+      "group": "analytics",
+      "description": "Phân bổ tiền sự kiện về dòng đơn",
+      "columns": [
+        {
+          "name": "event_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "payment_events.id"
+        },
+        {
+          "name": "order_item_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "order_items.id"
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "PK(event_id,order_item_id); amount >= 0; payment và item cùng order/currency, trừ unallocated giữ riêng."
+      ]
+    },
+    {
+      "name": "refund_items",
+      "group": "analytics",
+      "description": "Hoàn từng dòng, chưa bật khi thiếu policy",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "order_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "orders.id"
+        },
+        {
+          "name": "payment_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "payments.id"
+        },
+        {
+          "name": "order_item_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "order_items.id"
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "refund_request_key",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "provider_refund_id",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "currency",
+          "type": "varchar(3)",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "amount_minor",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "succeeded_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "FK(payment_id,order_id), FK(order_item_id,order_id); currency khớp payment/item.",
+        "amount > 0; tổng refund pending+succeeded không vượt item allocation/payment chưa hoàn; status: pending/succeeded/failed.",
+        "Một provider refund có thể gồm nhiều dòng: không UNIQUE(provider_refund_id) đơn lẻ; UNIQUE(provider,provider_refund_id,order_item_id) khi có."
+      ]
+    },
+    {
+      "name": "usage_counters",
+      "group": "operations",
+      "description": "Quota thương mại khác số mẫu",
+      "columns": [
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "users.id"
+        },
+        {
+          "name": "feature_code",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ],
+          "references": "features.code"
+        },
+        {
+          "name": "window_start",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "used",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "reserved",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "PK(user_id,feature_code,window_start); used/reserved >= 0; policy window theo feature."
+      ]
+    },
+    {
+      "name": "usage_reservations",
+      "group": "operations",
+      "description": "Giữ chỗ quota upload có hạn",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "upload_intent_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "upload_intents.id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "feature_code",
+          "type": "text",
+          "nullable": false,
+          "keys": [],
+          "references": "features.code"
+        },
+        {
+          "name": "window_start",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "amount",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(upload_intent_id,feature_code); composite FK counter và intent cùng user; amount > 0; reserved/committed/released."
+      ]
+    },
+    {
+      "name": "outbox_jobs",
+      "group": "operations",
+      "description": "Công việc bền vững cho Redis worker",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "aggregate_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "deduplication_key",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "safe_payload",
+          "type": "jsonb",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "attempts",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "available_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "locked_until",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "dispatched_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "last_enqueued_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "status: pending/running/completed/failed; attempts >= 0; enqueue không có nghĩa completed.",
+        "aggregate_id là tham chiếu logic theo type, không FK đa bảng; kết quả nghiệp vụ commit mới completed."
+      ]
+    },
+    {
+      "name": "webauthn_credentials",
+      "group": "identity",
+      "description": "Passkey public credential, không chứa private key",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "credential_id",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "public_key",
+          "type": "bytea",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "sign_count",
+          "type": "bigint",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "label",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "transports",
+          "type": "jsonb",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "backed_up",
+          "type": "boolean",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "last_used_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "UNIQUE(id,user_id); credential_id base64url canonical; sign_count >= 0, synced passkey không luôn tăng nên dùng policy thư viện.",
+        "Public key/credential/user mapping bất biến; thêm/xóa cần reauth/audit, không xóa credential cuối admin/staff."
+      ]
+    },
+    {
+      "name": "mfa_challenges",
+      "group": "identity",
+      "description": "Challenge WebAuthn theo mục đích và một lần",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "session_id",
+          "type": "uuid",
+          "nullable": true,
+          "keys": [],
+          "references": "sessions.id"
+        },
+        {
+          "name": "purpose",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "challenge",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "capability_hash",
+          "type": "text",
+          "nullable": true,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "action",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "resource_id",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "payload_hash",
+          "type": "text",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "attempts",
+          "type": "integer",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "purpose: login/enroll/reauth/recovery; challenge có entropy cao, TTL và attempt cap; capability chỉ cấp hạn chế, không phải business JWT.",
+        "Composite FK(session_id,user_id) cùng chủ khi session khác NULL; purpose/action/resource/payload không được client thay.",
+        "Xác minh library challenge/origin/RP/UV và credential cùng user trước consume; replay không tạo session/grant thêm."
+      ]
+    },
+    {
+      "name": "mfa_recovery_codes",
+      "group": "identity",
+      "description": "Recovery code hash dùng một lần",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "code_hash",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "used_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "Hash có entropy đủ mạnh; chỉ hiển thị code thô một lần; dùng code không bỏ qua policy phục hồi admin/staff."
+      ]
+    },
+    {
+      "name": "reauth_grants",
+      "group": "identity",
+      "description": "Quyền một lần cho request nhạy cảm",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [
+            "PK"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "users.id"
+        },
+        {
+          "name": "session_id",
+          "type": "uuid",
+          "nullable": false,
+          "keys": [],
+          "references": "sessions.id"
+        },
+        {
+          "name": "token_hash",
+          "type": "text",
+          "nullable": false,
+          "keys": [
+            "UK"
+          ]
+        },
+        {
+          "name": "action",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "resource_id",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "payload_hash",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "verified_method",
+          "type": "text",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "keys": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "keys": []
+        }
+      ],
+      "rules": [
+        "FK(session_id,user_id) cùng chủ; session active, action/resource/payload hash và hạn khớp trước consume.",
+        "Consume cùng transaction nghiệp vụ/audit, idempotent retry cùng thao tác không dùng grant cho request khác."
+      ]
+    }
+  ],
+  "diagrams": {
+    "identity": [
+      "users",
+      "sessions",
+      "refresh_tokens",
+      "auth_tokens",
+      "audit_logs",
+      "card_templates",
+      "webauthn_credentials",
+      "mfa_challenges",
+      "mfa_recovery_codes",
+      "reauth_grants"
+    ],
+    "cards-and-media": [
+      "users",
+      "card_templates",
+      "occasions",
+      "card_styles",
+      "cards",
+      "card_shares",
+      "card_media",
+      "card_share_media",
+      "upload_intents",
+      "media_assets",
+      "subscription_periods",
+      "template_licenses"
+    ],
+    "subscriptions": [
+      "users",
+      "plans",
+      "plan_versions",
+      "plan_prices",
+      "features",
+      "plan_features",
+      "plan_templates",
+      "subscriptions",
+      "subscription_periods",
+      "period_template_usage",
+      "order_fulfillments",
+      "subscription_events"
+    ],
+    "commerce": [
+      "users",
+      "card_templates",
+      "template_prices",
+      "plan_prices",
+      "orders",
+      "order_items",
+      "order_fulfillments",
+      "payments",
+      "template_licenses",
+      "license_events",
+      "discounts",
+      "discount_versions",
+      "discount_redemptions",
+      "discount_counters",
+      "discount_user_counters",
+      "discount_plan_targets",
+      "discount_template_targets"
+    ],
+    "cart": [
+      "users",
+      "carts",
+      "cart_items",
+      "checkout_quotes",
+      "orders",
+      "order_items",
+      "plan_prices",
+      "template_prices",
+      "discount_versions",
+      "discount_redemptions",
+      "order_fulfillments",
+      "template_licenses"
+    ],
+    "analytics": [
+      "orders",
+      "order_items",
+      "payments",
+      "payment_events",
+      "payment_event_allocations",
+      "refund_items",
+      "webhook_events",
+      "order_fulfillments"
+    ],
+    "operations": [
+      "users",
+      "upload_intents",
+      "usage_counters",
+      "usage_reservations",
+      "features",
+      "outbox_jobs",
+      "webhook_events"
+    ],
+    "overview": [
+      "users",
+      "sessions",
+      "refresh_tokens",
+      "auth_tokens",
+      "audit_logs",
+      "occasions",
+      "card_styles",
+      "card_templates",
+      "cards",
+      "upload_intents",
+      "media_assets",
+      "card_media",
+      "card_shares",
+      "card_share_media",
+      "plans",
+      "plan_versions",
+      "plan_prices",
+      "features",
+      "plan_features",
+      "plan_templates",
+      "template_prices",
+      "carts",
+      "cart_items",
+      "checkout_quotes",
+      "discounts",
+      "discount_versions",
+      "discount_plan_targets",
+      "discount_template_targets",
+      "discount_counters",
+      "discount_user_counters",
+      "orders",
+      "order_items",
+      "discount_redemptions",
+      "payments",
+      "order_fulfillments",
+      "subscriptions",
+      "subscription_periods",
+      "period_template_usage",
+      "template_licenses",
+      "license_events",
+      "webhook_events",
+      "subscription_events",
+      "payment_events",
+      "payment_event_allocations",
+      "refund_items",
+      "usage_counters",
+      "usage_reservations",
+      "outbox_jobs",
+      "webauthn_credentials",
+      "mfa_challenges",
+      "mfa_recovery_codes",
+      "reauth_grants"
+    ],
+    "security": [
+      "users",
+      "sessions",
+      "webauthn_credentials",
+      "mfa_challenges",
+      "mfa_recovery_codes",
+      "reauth_grants",
+      "audit_logs",
+      "outbox_jobs"
+    ]
+  }
+}
