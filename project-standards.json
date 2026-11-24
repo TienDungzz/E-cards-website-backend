@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "project": {
+    "name": "E-cards Website Backend",
+    "kind": "backend"
+  },
+  "checks": [
+    "docs",
+    "structure",
+    "quality"
+  ],
+  "documentation": {
+    "required": [
+      "README.md",
+      "docs/README.md",
+      "docs/backend/README.md",
+      "docs/backend/api.md",
+      "docs/backend/reliability.md",
+      "docs/backend/storage.md",
+      "docs/conventions.md",
+      "docs/getting-started.md",
+      "docs/product/README.md",
+      "docs/product/access-and-subscriptions.md",
+      "docs/product/analytics.md",
+      "docs/product/api.md",
+      "docs/product/authentication.md",
+      "docs/product/cart-and-checkout.md",
+      "docs/product/data-integrity.md",
+      "docs/product/database.md",
+      "docs/product/diagrams/README.md",
+      "docs/product/diagrams/analytics.md",
+      "docs/product/diagrams/cards-and-media.md",
+      "docs/product/diagrams/cart.md",
+      "docs/product/diagrams/commerce.md",
+      "docs/product/diagrams/identity.md",
+      "docs/product/diagrams/layouts.json",
+      "docs/product/diagrams/operations.md",
+      "docs/product/diagrams/overview.md",
+      "docs/product/diagrams/security.md",
+      "docs/product/diagrams/subscriptions.md",
+      "docs/product/flows.md",
+      "docs/product/implementation-plan.md",
+      "docs/product/pricing-and-discounts.md",
+      "docs/product/runtime-and-request-security.md",
+      "docs/product/schema.json",
+      "docs/product/security-controls.md",
+      "docs/quality/README.md",
+      "docs/security/README.md",
+      "docs/templates/capacity.md",
+      "docs/templates/decision.md",
+      "docs/templates/project.md",
+      "docs/templates/review.md",
+      "docs/templates/security.md"
+    ],
+    "scan": [
+      "README.md",
+      "docs"
+    ]
+  },
+  "structure": [
+    {
+      "name": "checker-scripts",
+      "enabled": true,
+      "root": "scripts",
+      "components": [
+        {
+          "name": "orchestrator",
+          "paths": [
+            "check-project.mjs"
+          ],
+          "required": true
+        },
+        {
+          "name": "config",
+          "paths": [
+            "check-config.mjs"
+          ],
+          "required": true
+        },
+        {
+          "name": "docs",
+          "paths": [
+            "check-docs.mjs"
+          ],
+          "required": true
+        },
+        {
+          "name": "structure",
+          "paths": [
+            "check-structure.mjs"
+          ],
+          "required": true
+        },
+        {
+          "name": "quality",
+          "paths": [
+            "check-quality.mjs"
+          ],
+          "required": true
+        },
+        {
+          "name": "shared-library",
+          "paths": [
+            "lib"
+          ],
+          "required": true
+        },
+        {
+          "name": "schema-generator",
+          "paths": [
+            "generate-schema-docs.mjs"
+          ],
+          "required": true
+        },
+        {
+          "name": "diagram-renderer",
+          "paths": [
+            "render-db-diagrams.ps1"
+          ],
+          "required": true
+        },
+        {
+          "name": "environment-launcher",
+          "paths": [
+            "start.mjs"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "backend-runtime",
+      "enabled": true,
+      "root": "src",
+      "components": [
+        {
+          "name": "http-server",
+          "paths": [
+            "server.mjs"
+          ],
+          "required": true
+        }
+      ]
+    }
+  ],
+  "code": {
+    "maxFunctionLines": 60
+  },
+  "quality": {
+    "required": [
+      "lint",
+      "schema"
+    ],
+    "commands": {
+      "lint": "npm run lint",
+      "schema": "npm run check:schema"
+    }
+  }
+}
